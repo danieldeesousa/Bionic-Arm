@@ -1,33 +1,38 @@
 #include <Servo.h>
+Servo servo;           // servo instance
 
-// LEDS attatched to 3 PWMS
-#define LED_RED 9
-#define LED_GREEN 10
-#define LED_BLUE 11
+// Pin definitions
+#define read_flex 0                             // ANALOG - flex sensor reading
+#define batt_read 1                             // ANALOG - battery monitoring
+#define button 2                                // DIGITAL - interrupt purposes
+#define lin_servo 6                             // DIGITAL - control servo over PWM
+#define LED_RED 9                               // DIGITAL - turned on in low power
+#define LED_GREEN 10                            // DIGITAL - turned on in active state
+#define LED_BLUE 11                             // DIGITAL - turned on standby mode
+
+// Battery and Batt state
+bool batt_state;                                // 1 = HIGH | 0 = LOW POWER
+const float referenceVolts = 5.0;               // the default reference on a 5-volt board
+float adc_res = 1023.0;                         // resolution of analog -> digital converter (2^10)
 
 // Button + FSM
-int button = 2; // used for interrupt purposes
-long debouncing_time = 150000; //Debouncing Time in useconds
-volatile unsigned long last_valid; // In useconds
-volatile bool state = 1; // 1: ON 0: LOW POWER
+long debouncing_time = 150000;                  // Debouncing Time in useconds
+volatile unsigned long last_valid;              // In useconds
+volatile bool state = 0;                        // 1: ON 0: LOW POWER
+volatile bool int_flag = 0;                     // used to signal whem button was just pressed
 
-// motor instances and variables
-Servo servo;
-int flexSensor;
-float servoPos;
-
-// vars for filters
-float iir_Av = 0;
-int16_t cbuf[32];
+// Flex sensor and filters
+int flexSensor;                                 // analog read of flexsensor
+float iir_Av = 0;                               // used to track IIR value
+int16_t cbuf[32];                               // buffer storing latest 32 values
 uint8_t offset = 0;
-
 // 12 poles for FIR filter
 static const uint16_t FIRCoeffs[12] = {172, 321, 579, 927, 1360, 1858, 2390, 2916, 3391, 3768, 4012, 4096};
 
 void setup() 
 {
   Serial.begin(9600);
-  servo.attach(6); // PWM 6
+  servo.attach(lin_servo); // PWM 6
   servo.write(0); // reset servo to original position
   pinMode(LED_RED, OUTPUT); pinMode(LED_GREEN, OUTPUT); pinMode(LED_BLUE, OUTPUT); 
   attachInterrupt(digitalPinToInterrupt(button), ISR_debounce, FALLING);
@@ -36,44 +41,29 @@ void setup()
 void loop() 
 {
   // read sensor value (voltage divider - 10K)
-  flexSensor = analogRead(0);
+  flexSensor = analogRead(read_flex);
 
   // calculate filter values
   float iirStatus = iirFilter(flexSensor);
-  int firVal = lowPassFIRFilter((int)flexSensor);
+  batt_state = checkBattery();
+  changeState();
 
-  // DO SOMETHING WITH PROCESSED VALUES
-}
-
-void driveMotor(int positionVal)
-{
-  servoPos = map(positionVal, 700, 900, 0, 180);
-  //servoPos = constrain(flexSensor, 0, 180);
-
-  // move servo based on position of flex sensor  
-  if(servoPos < 180 && servoPos > 0)
-    servo.write(servoPos);
-  delay(20);
-}
-// test function which rotates servo motor 180 degrees when button is pressed
-void testButton()
-{
-  pinMode(8, INPUT); // used to measure state of button
-  
-  // loop in test mode
-  while(1)
+  // check if interrupt or low battery state or detected grip/release
+  if(int_flag || !batt_state)
   {
-    // read button state
-    int buttonState = digitalRead(8);
-    
-    // if button is pressed (assuming pulldown)
-    if(buttonState)
-      servo.write(180);
-    
-    // if button is not pressed (assuming pullup)
+    if(!batt_state || !state)
+      driveMotor(0);
     else
-      servo.write(0);
-  }
+      driveMotor(180);
+    int_flag = 0;
+  }  
+}
+
+void driveMotor(int servoPos)
+{
+  // move servo bus restrict to (0,180)
+  if(servoPos <= 180 && servoPos >= 0)
+    servo.write(servoPos);
 }
 
 // Low Pass IIR Filter
@@ -107,15 +97,33 @@ int lowPassFIRFilter(int newSample)
   return(z >> 15);
 }
 
-//  Integer multiplier
-int32_t mul16(int16_t x, int16_t y)
-{
-  return((long)x * (long)y);
-}
-
 void turnOnLED(int ledColour)
 {
   PORTB = (1 << (ledColour - 8));
+}
+
+// change state from ON <-> LOW POWER
+void changeState()
+{
+  if(!batt_state)
+  {
+    turnOnLED(LED_RED);
+    state = 0; // reset state to low power -- require user to press button after plugging in battery
+  }
+  else if(state)
+    turnOnLED(LED_GREEN);
+  else if(!state)
+    turnOnLED(LED_BLUE);
+}
+
+bool checkBattery()
+{
+// read value from sensor and divide it by the resolution, multiply by reference voltage
+  float volts = (analogRead(batt_read) / adc_res)*referenceVolts*2; 
+  if(volts >= referenceVolts)
+    return true;
+  else
+    return false;
 }
 
 // Debouncing function - determines whether button press is valid
@@ -123,14 +131,14 @@ void ISR_debounce()
 {
   if((long)(micros() - last_valid) >= debouncing_time) 
   {
-    changeState();
+    state = !state; // change from low power <-> active
+    int_flag = 1;
     last_valid = micros();
   }
 }
 
-// change state from ON <-> LOW POWER
-void changeState()
+//  Integer multiplier
+int32_t mul16(int16_t x, int16_t y)
 {
-  state = !state;
-  digitalWrite(9, state);
+  return((long)x * (long)y);
 }
