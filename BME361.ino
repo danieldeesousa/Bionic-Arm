@@ -24,12 +24,12 @@ volatile bool int_flag = 0;                     // used to signal whem button wa
 // Flex sensor processing and filters
 int flexSensor;                                 // analog read of flexsensor
 bool gripState = 0;                             // 0 = no grip; 1 = grip (motor @ 180)
-// - gripping
+// - gripping									-----------------------------------------------------------
 const int grip_threshold = 800;                 // flex must exceed this val to be considered gripping
 long grip_startTime = 0;                        // used to determine time duration which grip has beem on
 // - releasing                                  -----------------------------------------------------------
 uint8_t rel_count = 0;                          // number of twitches in time frame
-int rel_threshold = 25;                         // difference between valley value and flex at grip
+const int rel_threshold = 25;                         // difference between valley value and flex at grip
 long rel_startTime = 0;                         // used to determine how many finger twitches in time frame
 int flex_at_grip = 0;                           // flex value recorded when entering grip mode
 float rel_prevVal = 0;                          // used in valley detection
